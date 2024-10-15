@@ -19,7 +19,10 @@ export class PokerHandEvaluator {
   private hand: PlayingCard[];
 
   constructor(hand: PlayingCard[]) {
-    this.hand = hand.sort((a, b) => a.rank - b.rank);
+    // do not modify the original hand
+    this.hand = hand.slice();
+
+    this.hand.sort((a, b) => a.rank - b.rank);
   }
 
   evaluate(): PokerHand {

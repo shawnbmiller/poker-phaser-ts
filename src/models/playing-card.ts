@@ -22,6 +22,7 @@ export enum Rank {
 }
 
 export class PlayingCard {
+    held: boolean;
     constructor(public suit: Suit, public rank: Rank) {}
 
     toString(): string {
