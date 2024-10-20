@@ -56,6 +56,7 @@ export class Game extends Scene {
     credits: number;
     bet: number;
     creditsText: Phaser.GameObjects.Text;
+    gameOver: import("phaser").GameObjects.Text;
 
 
 
@@ -99,14 +100,21 @@ export class Game extends Scene {
 
     private setupGameInterface() {
         this.add.text(512, 70, 'BONUS POKER', { fontFamily: 'upheaval', fontSize: '32pt', color: '#ffffff', shadow: { color: '#333333', offsetX: 2, offsetY: 2, blur: 0, fill: true, stroke: false } }).setOrigin(0.5);
-
         this.displayFaceDownCards();
         this.setupHeldText();
+        this.setupGameOverText();
         this.setupPayoutBoxes();
         this.setupCreditsAndBet();
         this.setupDrawButton();
         this.handText = this.add.text(0, 0, '', { fontFamily: 'upheaval', fontSize: '24pt', color: '#ffffff', shadow: { color: '#333333', offsetX: 2, offsetY: 2, blur: 0, fill: true, stroke: false } }).setOrigin(0.5);
         this.setupKeyboardInput();
+    }
+
+    private setupGameOverText() {
+        // create GAME OVER text over the cards. should be a blue rectangle with red text outlined in yellow
+        this.gameOver = this.add.text(512, 0, 'GAME OVER', { fontFamily: 'upheaval', fontSize: '64pt', color: '#ff0000', stroke: '#ffff00', strokeThickness: 5, backgroundColor: '#2222ff' }).setOrigin(0.5).setVisible(false);
+        // align game over text to vertical center of cards
+        Phaser.Display.Align.In.Center(this.gameOver, this.card[2]);
     }
 
     private setupHeldText() {
@@ -184,7 +192,6 @@ export class Game extends Scene {
                     this.hand.forEach(card => card.held = false);
                     this.heldText.forEach(held => held.setVisible(false));
 
-
                     const evaluator = new PokerHandEvaluator(this.hand);
                     console.log("redraw hand", ...this.hand)
                     const evaluation = evaluator.evaluate();
@@ -197,9 +204,12 @@ export class Game extends Scene {
                     if (payout !== undefined) {
                         this.credits += payout * this.bet;
                     }
-
                     this.displayCredits();
 
+                    // after 1.5 seconds, game over text should be displayed
+                    this.time.delayedCall(1500, () => {
+                        this.gameOver.setVisible(true);
+                    });
                 });
 
             }
@@ -212,6 +222,8 @@ export class Game extends Scene {
                 this.handText.setVisible(false);
                 // set state to bet
                 this.state = GameState.Bet;
+                // hide game over text
+                this.gameOver.setVisible(false);
             }
 
         });
