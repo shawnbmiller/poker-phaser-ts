@@ -2,7 +2,7 @@
     "name": "video-poker",
     "version": "1.0.0",
     "description": "Video Poker",
-    "license": "UNLICENSED",
+    "license": "MIT",
     "main": "src/main.js",
     "scripts": {
         "dev": "webpack-dev-server --config webpack/config.dev.js --open",
