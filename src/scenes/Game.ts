@@ -1,4 +1,5 @@
 import { Scene } from "phaser";
+import { EventEmitter } from "events";
 import WebFont from "webfontloader";
 import { Deck } from "../models/deck";
 import { PlayingCard, Rank, Suit } from "../models/playing-card";
@@ -49,8 +50,6 @@ export class Game extends Scene {
     card: Phaser.GameObjects.Image[] = [];
     heldText: Phaser.GameObjects.Text[] = [];
     fontReady: boolean;
-    deck: Deck;
-    hand: PlayingCard[] = [];
     handText: Phaser.GameObjects.Text;
     // credits: number;
     // bet: number;
@@ -345,132 +344,110 @@ export class Game extends Scene {
         drawButton.on("pointerdown", this.gameContext.next);
     }
 
-    private NextAction = () => {
-        if (this.state === GameState.Bet) {
-            // perform Initial draw
-            this.startGameRound();
-        } else if (this.state === GameState.InitialDraw) {
-            // perform Redraw
-            this.state = GameState.Redraw;
-            let count = 0;
-            for (let i = 0; i < 5; i++) {
-                // get a count of cards that are not held
-                if (!this.hand[i].held) {
-                    //set card to card back
-                    this.card[i].setTexture("back");
-                    this.hand[i] = this.deck.deal();
-                    this.time.delayedCall(i * 200, () => {
-                        this.sound.play("wood");
-                        this.card[i].setTexture(this.getCardTexture(this.hand[i]));
-                    });
-                    count++;
-                }
-            }
+    // private NextAction = () => {
+    //     if (this.state === GameState.Bet) {
+    //         // perform Initial draw
+    //         this.startGameRound();
+    //     } else if (this.state === GameState.InitialDraw) {
+    //         // perform Redraw
+    //         this.state = GameState.Redraw;
+    //         let count = 0;
+    //         for (let i = 0; i < 5; i++) {
+    //             // get a count of cards that are not held
+    //             if (!this.hand[i].held) {
+    //                 //set card to card back
+    //                 this.card[i].setTexture("back");
+    //                 this.hand[i] = this.deck.deal();
+    //                 this.time.delayedCall(i * 200, () => {
+    //                     this.sound.play("wood");
+    //                     this.card[i].setTexture(this.getCardTexture(this.hand[i]));
+    //                 });
+    //                 count++;
+    //             }
+    //         }
 
-            // evaluate the hand after all redraws
-            this.time.delayedCall(count * 200, () => {
-                // clear hold status
-                this.hand.forEach((card) => (card.held = false));
-                this.heldText.forEach((held) => held.setVisible(false));
+    //         // evaluate the hand after all redraws
+    //         this.time.delayedCall(count * 200, () => {
+    //             // clear hold status
+    //             this.hand.forEach((card) => (card.held = false));
+    //             this.heldText.forEach((held) => held.setVisible(false));
 
-                const evaluator = new PokerHandEvaluator(this.hand);
-                console.log("redraw hand", ...this.hand);
-                const evaluation = evaluator.evaluate();
-                this.handText.setText(`${evaluation}`);
-                Phaser.Display.Align.In.Center(
-                    this.handText,
-                    this.heldText[2],
-                    0,
-                    -this.handText.height
-                );
-                this.handText.setVisible(true);
+    //             const evaluator = new PokerHandEvaluator(this.hand);
+    //             console.log("redraw hand", ...this.hand);
+    //             const evaluation = evaluator.evaluate();
+    //             this.handText.setText(`${evaluation}`);
+    //             Phaser.Display.Align.In.Center(
+    //                 this.handText,
+    //                 this.heldText[2],
+    //                 0,
+    //                 -this.handText.height
+    //             );
+    //             this.handText.setVisible(true);
 
-                // calculate payout
-                const payout = payoutMap.get(evaluation);
-                if (payout !== undefined) {
-                    this.gameContext.credits += payout * this.gameContext.bet;
-                }
-                this.displayCredits();
+    //             // calculate payout
+    //             const payout = payoutMap.get(evaluation);
+    //             if (payout !== undefined) {
+    //                 this.gameContext.credits += payout * this.gameContext.bet;
+    //             }
+    //             this.displayCredits();
 
-                // after 1.5 seconds, game over text should be displayed
-                this.time.delayedCall(1500, () => {
-                    this.gameOver.setVisible(true);
-                });
-            });
-        } else {
-            // set all cards to face down
-            this.card.forEach((c) => c.setTexture("back"));
-            // clear hand
-            this.hand = [];
-            // clear hand text
-            this.handText.setVisible(false);
-            // set state to bet
-            this.state = GameState.Bet;
-            // hide game over text
-            this.gameOver.setVisible(false);
-        }
-    };
+    //             // after 1.5 seconds, game over text should be displayed
+    //             this.time.delayedCall(1500, () => {
+    //                 this.gameOver.setVisible(true);
+    //             });
+    //         });
+    //     } else {
+    //         // // set all cards to face down
+    //         // this.card.forEach((c) => c.setTexture("back"));
+    //         // // clear hand
+    //         // this.hand = [];
+    //         // // clear hand text
+    //         // this.handText.setVisible(false);
+    //         // // set state to bet
+    //         // this.state = GameState.Bet;
+    //         // // hide game over text
+    //         // this.gameOver.setVisible(false);
+    //     }
+    // };
 
-    private startGameRound() {
-        // subtract bet from credits
-        this.gameContext.credits -= this.gameContext.bet;
-        this.displayCredits();
+    // private startGameRound() {
+    //     this.displayCredits();
 
-        // reset UI
-        this.heldText.forEach((held) => held.setVisible(false));
-        this.handText.setVisible(false);
+    //     // reset UI
+    //     this.heldText.forEach((held) => held.setVisible(false));
+    //     this.handText.setVisible(false);
 
-        // get a new deck, shuffle, and deal 5 cards
-        this.deck = new Deck();
-        this.deck.shuffle();
-        this.hand = [];
-        for (let i = 0; i < 5; i++) {
-            this.hand.push(this.deck.deal());
-        }
+    //     // display the cards
+    //     for (let i = 0; i < 5; i++) {
+    //         this.time.delayedCall(i * 200, () => {
+    //             this.sound.play("wood");
+    //             this.card[i].setTexture(this.getCardTexture(this.gameContext.hand[i]));
+    //         });
+    //     }
 
-        // display the cards
-        for (let i = 0; i < 5; i++) {
-            this.time.delayedCall(i * 200, () => {
-                this.sound.play("wood");
-                this.card[i].setTexture(this.getCardTexture(this.hand[i]));
-            });
-        }
-
-        // after all cards are displayed, evaluate the hand
-        this.time.delayedCall(5 * 200, () => {
-            this.state = GameState.InitialDraw;
-            const evaluator = new PokerHandEvaluator(this.hand);
-            const evaluation = evaluator.evaluate();
-            this.handText.setText(`${evaluation}`);
-            this.handText.setVisible(true);
-            Phaser.Display.Align.In.Center(
-                this.handText,
-                this.heldText[2],
-                0,
-                -this.handText.height
-            );
-            console.log("initial hand", ...this.hand);
-        });
-    }
+    //     // after all cards are displayed, evaluate the hand
+    //     this.time.delayedCall(5 * 200, () => {
+    //         const evaluation = this.gameContext.evaluation;
+    //         this.handText.setText(`${evaluation}`);
+    //         this.handText.setVisible(true);
+    //         Phaser.Display.Align.In.Center(
+    //             this.handText,
+    //             this.heldText[2],
+    //             0,
+    //             -this.handText.height
+    //         );
+    //         console.log("initial hand", ...this.gameContext.hand);
+    //     });
+    // }
 
     private setupKeyboardInput() {
         if (this.input.keyboard) {
-            this.input.keyboard.on("keydown-ONE", () =>
-                this.toggleHoldCommand(this.hand[0]).execute()
-            );
-            this.input.keyboard.on("keydown-TWO", () =>
-                this.toggleHoldCommand(this.hand[1]).execute()
-            );
-            this.input.keyboard.on("keydown-THREE", () =>
-                this.toggleHoldCommand(this.hand[2]).execute()
-            );
-            this.input.keyboard.on("keydown-FOUR", () =>
-                this.toggleHoldCommand(this.hand[3]).execute()
-            );
-            this.input.keyboard.on("keydown-FIVE", () =>
-                this.toggleHoldCommand(this.hand[4]).execute()
-            );
-            this.input.keyboard.on("keydown-SPACE", () => this.NextAction());
+            this.input.keyboard.on("keydown-ONE", this.gameContext.onHoldOne);
+            this.input.keyboard.on("keydown-TWO", this.gameContext.onHoldTwo);
+            this.input.keyboard.on("keydown-THREE", this.gameContext.onHoldThree);
+            this.input.keyboard.on("keydown-FOUR", this.gameContext.onHoldFour);
+            this.input.keyboard.on("keydown-FIVE", this.gameContext.onHoldFive);
+            this.input.keyboard.on("keydown-SPACE", this.gameContext.next);
         }
     }
 
@@ -548,30 +525,16 @@ export class Game extends Scene {
         return `${suit}_${rank}`;
     }
 
-    // property for the current state of the game
-    private state: GameState = GameState.Bet;
 
     private toggleHold(card: PlayingCard) {
-        if (!this.canToggleHold()) {
-            return;
-        }
-        card.held = !card.held;
+
         // set the visibility of the held text
-        this.heldText[this.hand.indexOf(card)].setVisible(card.held);
+        this.heldText[this.gameContext.hand.indexOf(card)].setVisible(card.held);
         this.sound.play("wood");
     }
 
-    private canToggleHold(): boolean {
-        // false until after initial draw. becomes false again after draw
-        return this.state === GameState.InitialDraw;
-    }
 
-    private toggleHoldCommand(card: PlayingCard): Command {
-        return new Command(
-            () => this.toggleHold(card),
-            () => true
-        );
-    }
+
 
     private displayCredits() {
         this.creditsText.setText(this.gameContext.credits.toString());
@@ -587,19 +550,14 @@ export class Command {
     constructor(public execute: () => void, public canExecute: () => boolean) { }
 }
 
-// an enum to represent the state of the game
-enum GameState {
-    Bet,
-    InitialDraw,
-    Redraw,
-}
 
-class PokerGameContext {
+class PokerGameContext extends EventEmitter {
     static readonly MAX_BET = 100;
     deck: Deck;
     hand: PlayingCard[] = [];
     credits: number;
     private _bet: number = 1;
+    evaluation: any;
     public get bet(): number {
         return this._bet;
     }
@@ -609,11 +567,15 @@ class PokerGameContext {
         } else if (value < 1) {
             this._bet = 1;
         } else {
+            if (this._bet !== value) {
             this._bet = value;
+            this.emit('betChanged');
+            }
         }
     }
 
     constructor() {
+        super();
         this.state = new BetState(this);
         this.credits = 100;
     }
@@ -628,11 +590,12 @@ class PokerGameContext {
             return;
         }
         // call onExit on the current state
-        this._state.onExit();
+        if (this._state) this._state.onExit();
         // set the new state
         this._state = v;
+        console.log("state changed to", this._state.constructor.name);
         // call onEnter on the new state
-        this._state.onEnter();
+        if(this._state) this._state.onEnter();
     }
 
     public next() {
@@ -682,7 +645,7 @@ abstract class PokerGameState {
         return true;
     }
     onEnter(): void{}
-    onExit(): void{};
+    onExit(): void{}
     abstract increaseBet(): void;
     abstract decreaseBet(): void;
     abstract betMax(): void;
@@ -694,6 +657,11 @@ abstract class PokerGameState {
 }
 
 class BetState extends PokerGameState {
+    onEnter(): void {
+        this.context.deck = new Deck();
+        this.context.deck.shuffle();
+        this.context.hand = [];
+    }
     onExit(): void {
         this.context.credits -= this.context.bet;
     }
@@ -724,13 +692,15 @@ class BetState extends PokerGameState {
 }
 
 class InitialDrawState extends PokerGameState {
-    increaseBet(): void {}// do nothing
-    decreaseBet(): void {
-        // do nothing
+    onEnter(): void {
+        for (let i = 0; i < 5; i++) {
+            this.context.hand[i] = this.context.deck.deal();
+        }
     }
-    betMax(): void {
-        // do nothing
-    }
+    increaseBet(): void {}
+    decreaseBet(): void {}
+    betMax(): void {}
+
     holdOne(): void {
         this.context.hand[0].held = !this.context.hand[0].held;
     }
@@ -752,6 +722,24 @@ class InitialDrawState extends PokerGameState {
 }
 
 class RedrawState extends PokerGameState {
+    onEnter(): void {
+        // deal new cards for each card that is not held
+        for (let i = 0; i < 5; i++) {
+            if (!this.context.hand[i].held) {
+                this.context.hand[i] = this.context.deck.deal();
+            }
+        }
+
+        // evaluate and pay out
+        const evaluator = new PokerHandEvaluator(this.context.hand);
+        const evaluation = evaluator.evaluate();
+        const payout = payoutMap.get(evaluation);
+        if (payout !== undefined) {
+            this.context.credits += payout * this.context.bet;
+        }
+
+        this.context.next();
+    }
     increaseBet(): void {
         // do nothing
     }

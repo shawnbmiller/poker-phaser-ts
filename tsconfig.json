@@ -17,9 +17,10 @@
         /* Linting */
         "strict": true,
         "strictPropertyInitialization": false,
-        "noUnusedLocals": true,
+        "noUnusedLocals": false,
         "noUnusedParameters": true,
-        "noFallthroughCasesInSwitch": true
+        "noFallthroughCasesInSwitch": true,
+        "allowUnusedLabels": true
     },
     "include": [
         "src"
