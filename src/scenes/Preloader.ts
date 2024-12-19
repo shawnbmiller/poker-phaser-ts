@@ -45,6 +45,7 @@ export class Preloader extends Scene
         
         this.load.setPath('assets');
         this.load.audio('wood', 'wood.wav');
+        this.load.audio('blip', 'blipSelect.wav');
 
     }
 

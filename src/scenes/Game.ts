@@ -1,9 +1,8 @@
 import { Scene } from "phaser";
-import { EventEmitter } from "events";
 import WebFont from "webfontloader";
-import { Deck } from "../models/deck";
 import { PlayingCard, Rank, Suit } from "../models/playing-card";
-import { PokerHand, PokerHandEvaluator } from "../models/poker-hand-evaluator";
+import { PokerHand } from "../models/poker-hand-evaluator";
+import { PokerGameContext } from "./PokerGameContext";
 
 const cardWidth = 190;
 const cardHeight = (cardWidth / 2.5) * 3.5;
@@ -16,7 +15,7 @@ const startY = 384 + cardHeight / 2 + cardSpacing;
 // };
 
 // map poker hand to payout
-const payoutMap = new Map<PokerHand, number>([
+export const payoutMap = new Map<PokerHand, number>([
     [PokerHand.RoyalFlush, 250],
     [PokerHand.StraightFlush, 50],
     [PokerHand.FourOfAKind, 25],
@@ -56,6 +55,7 @@ export class Game extends Scene {
     creditsText: Phaser.GameObjects.Text;
     gameOver: import("phaser").GameObjects.Text;
     gameContext: PokerGameContext;
+    betText: import("phaser").GameObjects.Text;
 
     constructor() {
         super("Game");
@@ -148,6 +148,89 @@ export class Game extends Scene {
             })
             .setOrigin(0.5);
         this.setupKeyboardInput();
+
+        this.gameContext.on('betChanged', this.displayBet.bind(this));
+        this.gameContext.on('creditsChanged', this.displayCredits.bind(this));
+        this.gameContext.on('draw', this.displayDraw.bind(this));
+        this.gameContext.on('redraw', this.displayRedraw.bind(this));
+        this.gameContext.on('holdToggled', this.toggleHold.bind(this));
+
+    }
+
+    private displayRedraw() {
+        let count = 0;
+        for (let i = 0; i < 5; i++) {
+            // get a count of cards that are not held
+            if (!this.gameContext.hand[i].held) {
+                //set card to card back
+                this.card[i].setTexture("back");
+                this.time.delayedCall(i * 200, () => {
+                    this.sound.play("wood");
+                    this.card[i].setTexture(this.getCardTexture(this.gameContext.hand[i]));
+                });
+                count++;
+            }
+        }
+
+        // evaluate the hand after all redraws
+        this.time.delayedCall(count * 200, () => {
+            // clear hold status
+            this.gameContext.hand.forEach((card) => (card.held = false));
+            this.heldText.forEach((held) => held.setVisible(false));
+
+            const evaluation = this.gameContext.evaluation;
+            this.handText.setText(`${evaluation}`);
+            Phaser.Display.Align.In.Center(
+                this.handText,
+                this.heldText[2],
+                0,
+                -this.handText.height
+            );
+            this.handText.setVisible(true);
+
+            // after 1.5 seconds, game over text should be displayed
+            this.time.delayedCall(1500, () => {
+                this.gameOver.setVisible(true);
+            });
+        });
+    }
+
+    private displayDraw() {
+        // clear held text
+        this.heldText.forEach((held) => held.setVisible(false));
+        // clear hand text
+        this.handText.setVisible(false);
+        // clear game over text
+        this.gameOver.setVisible(false);
+        // set all cards to face down
+        this.displayFaceDownCards();
+        // display each card in the hand
+        for (let i = 0; i < 5; i++) {
+            // wait 200ms before displaying the next card
+            this.time.delayedCall(i * 220, () => {
+                this.sound.play("wood");
+                this.card[i].setTexture(this.getCardTexture(this.gameContext.hand[i]));
+            });
+        }
+
+        // after all cards are displayed, evaluate the hand
+        this.time.delayedCall(5 * 200, () => {
+            const evaluation = this.gameContext.evaluation;
+            this.handText.setText(`${evaluation}`);
+            this.handText.setVisible(true);
+            Phaser.Display.Align.In.Center(
+                this.handText,
+                this.heldText[2],
+                0,
+                -this.handText.height
+            );
+            console.log("initial hand", ...this.gameContext.hand);
+        });
+    }
+
+    private displayBet() {
+        this.betText.setText(this.gameContext.bet.toString());
+        this.sound.play("blip");
     }
 
     private setupGameOverText() {
@@ -302,7 +385,7 @@ export class Game extends Scene {
             -15,
             betLabel.height + 5
         );
-        const betValue = this.add
+        this.betText = this.add
             .text(0, 0, this.gameContext.bet.toString(), {
                 fontFamily: "upheaval",
                 fontSize: "24pt",
@@ -317,7 +400,7 @@ export class Game extends Scene {
                 },
             })
             .setOrigin(1, 1);
-        Phaser.Display.Align.In.TopRight(betValue, this.card[4], -15, 0);
+        Phaser.Display.Align.In.TopRight(this.betText, this.card[4], -15, 0);
     }
 
     private setupDrawButton() {
@@ -341,7 +424,7 @@ export class Game extends Scene {
             .setOrigin(0.5);
         Phaser.Display.Align.In.Center(drawText, drawButton);
 
-        drawButton.on("pointerdown", this.gameContext.next);
+        drawButton.on("pointerdown", this.gameContext.next.bind(this.gameContext));
     }
 
     // private NextAction = () => {
@@ -442,12 +525,14 @@ export class Game extends Scene {
 
     private setupKeyboardInput() {
         if (this.input.keyboard) {
-            this.input.keyboard.on("keydown-ONE", this.gameContext.onHoldOne);
-            this.input.keyboard.on("keydown-TWO", this.gameContext.onHoldTwo);
-            this.input.keyboard.on("keydown-THREE", this.gameContext.onHoldThree);
-            this.input.keyboard.on("keydown-FOUR", this.gameContext.onHoldFour);
-            this.input.keyboard.on("keydown-FIVE", this.gameContext.onHoldFive);
-            this.input.keyboard.on("keydown-SPACE", this.gameContext.next);
+            this.input.keyboard.on("keydown-ONE", this.gameContext.onHoldOne, this.gameContext);
+            this.input.keyboard.on("keydown-TWO", this.gameContext.onHoldTwo, this.gameContext);
+            this.input.keyboard.on("keydown-THREE", this.gameContext.onHoldThree, this.gameContext);
+            this.input.keyboard.on("keydown-FOUR", this.gameContext.onHoldFour, this.gameContext);
+            this.input.keyboard.on("keydown-FIVE", this.gameContext.onHoldFive, this.gameContext);
+            this.input.keyboard.on("keydown-SPACE", this.gameContext.next, this.gameContext);
+            this.input.keyboard.on("keydown-ZERO", this.gameContext.onIncreaseBet, this.gameContext);
+            this.input.keyboard.on("keydown-NINE", this.gameContext.onDecreaseBet, this.gameContext);
         }
     }
 
@@ -526,245 +611,18 @@ export class Game extends Scene {
     }
 
 
-    private toggleHold(card: PlayingCard) {
+    private toggleHold(index: number) {
 
         // set the visibility of the held text
-        this.heldText[this.gameContext.hand.indexOf(card)].setVisible(card.held);
+        this.heldText[index].setVisible(this.gameContext.hand[index].held);
         this.sound.play("wood");
     }
-
-
-
 
     private displayCredits() {
         this.creditsText.setText(this.gameContext.credits.toString());
     }
-
-    // a command to draw new cards
-}
-
-/**
- * A class to represent a command. A command has an execute method and a canExecute method.
- */
-export class Command {
-    constructor(public execute: () => void, public canExecute: () => boolean) { }
 }
 
 
-class PokerGameContext extends EventEmitter {
-    static readonly MAX_BET = 100;
-    deck: Deck;
-    hand: PlayingCard[] = [];
-    credits: number;
-    private _bet: number = 1;
-    evaluation: any;
-    public get bet(): number {
-        return this._bet;
-    }
-    public set bet(value: number) {
-        if (value > PokerGameContext.MAX_BET) {
-            this._bet = PokerGameContext.MAX_BET;
-        } else if (value < 1) {
-            this._bet = 1;
-        } else {
-            if (this._bet !== value) {
-            this._bet = value;
-            this.emit('betChanged');
-            }
-        }
-    }
 
-    constructor() {
-        super();
-        this.state = new BetState(this);
-        this.credits = 100;
-    }
 
-    private _state: PokerGameState;
-    public get state(): PokerGameState {
-        return this._state;
-    }
-    public set state(v: PokerGameState) {
-        // if v is the same as the current state, do nothing
-        if (this._state === v) {
-            return;
-        }
-        // call onExit on the current state
-        if (this._state) this._state.onExit();
-        // set the new state
-        this._state = v;
-        console.log("state changed to", this._state.constructor.name);
-        // call onEnter on the new state
-        if(this._state) this._state.onEnter();
-    }
-
-    public next() {
-        this.state = this.state.next();
-    }
-
-    public onIncreaseBet() {
-        this.state.increaseBet();
-    }
-
-    public onDecreaseBet() {
-        this.state.decreaseBet();
-    }
-
-    public onBetMax() {
-        this.state.betMax();
-    }
-
-    public onHoldOne() {
-        this.state.holdOne();
-    }
-
-    public onHoldTwo() {
-        this.state.holdTwo();
-    }
-
-    public onHoldThree() {
-        this.state.holdThree();
-    }
-
-    public onHoldFour() {
-        this.state.holdFour();
-    }
-
-    public onHoldFive() {
-        this.state.holdFive();
-    }
-}
-
-abstract class PokerGameState {
-    protected context: PokerGameContext;
-    constructor(context: PokerGameContext) {
-        this.context = context;
-    }
-    abstract next(): PokerGameState;
-    canTransitionNext(): boolean {
-        return true;
-    }
-    onEnter(): void{}
-    onExit(): void{}
-    abstract increaseBet(): void;
-    abstract decreaseBet(): void;
-    abstract betMax(): void;
-    abstract holdOne(): void;
-    abstract holdTwo(): void;
-    abstract holdThree(): void;
-    abstract holdFour(): void;
-    abstract holdFive(): void;
-}
-
-class BetState extends PokerGameState {
-    onEnter(): void {
-        this.context.deck = new Deck();
-        this.context.deck.shuffle();
-        this.context.hand = [];
-    }
-    onExit(): void {
-        this.context.credits -= this.context.bet;
-    }
-    increaseBet(): void {
-        this.context.bet += 1;
-    }
-    decreaseBet(): void {
-        this.context.bet -= 1;
-    }
-    betMax(): void {
-        this.context.bet = PokerGameContext.MAX_BET;
-    }
-    holdOne(): void {}
-    holdTwo(): void {}
-    holdThree(): void {}
-    holdFour(): void {}
-    holdFive(): void {}
-    next(): PokerGameState {
-        if (this.canTransitionNext()) {
-            return new InitialDrawState(this.context);
-        }
-
-        return this;
-    }
-    canTransitionNext(): boolean {
-        return this.context.credits >= this.context.bet;
-    }
-}
-
-class InitialDrawState extends PokerGameState {
-    onEnter(): void {
-        for (let i = 0; i < 5; i++) {
-            this.context.hand[i] = this.context.deck.deal();
-        }
-    }
-    increaseBet(): void {}
-    decreaseBet(): void {}
-    betMax(): void {}
-
-    holdOne(): void {
-        this.context.hand[0].held = !this.context.hand[0].held;
-    }
-    holdTwo(): void {
-        this.context.hand[1].held = !this.context.hand[1].held;
-    }
-    holdThree(): void {
-        this.context.hand[2].held = !this.context.hand[2].held;
-    }
-    holdFour(): void {
-        this.context.hand[3].held = !this.context.hand[3].held;
-    }
-    holdFive(): void {
-        this.context.hand[4].held = !this.context.hand[4].held;
-    }
-    next(): PokerGameState {
-        return new RedrawState(this.context);
-    }
-}
-
-class RedrawState extends PokerGameState {
-    onEnter(): void {
-        // deal new cards for each card that is not held
-        for (let i = 0; i < 5; i++) {
-            if (!this.context.hand[i].held) {
-                this.context.hand[i] = this.context.deck.deal();
-            }
-        }
-
-        // evaluate and pay out
-        const evaluator = new PokerHandEvaluator(this.context.hand);
-        const evaluation = evaluator.evaluate();
-        const payout = payoutMap.get(evaluation);
-        if (payout !== undefined) {
-            this.context.credits += payout * this.context.bet;
-        }
-
-        this.context.next();
-    }
-    increaseBet(): void {
-        // do nothing
-    }
-    decreaseBet(): void {
-        // do nothing
-    }
-    betMax(): void {
-        // do nothing
-    }
-    holdOne(): void {
-        // do nothing
-    }
-    holdTwo(): void {
-        // do nothing
-    }
-    holdThree(): void {
-        // do nothing
-    }
-    holdFour(): void {
-        // do nothing
-    }
-    holdFive(): void {
-        // do nothing
-    }
-    next(): PokerGameState {
-        return new BetState(this.context);
-    }
-}
