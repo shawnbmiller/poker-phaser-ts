@@ -3,6 +3,7 @@ import WebFont from "webfontloader";
 import { PlayingCard, Rank, Suit } from "../models/playing-card";
 import { PokerHand } from "../models/poker-hand-evaluator";
 import { PokerGameContext } from "./PokerGameContext";
+import { BetState } from "./BetState";
 
 const cardWidth = 190;
 const cardHeight = (cardWidth / 2.5) * 3.5;
@@ -56,6 +57,10 @@ export class Game extends Scene {
     gameOver: import("phaser").GameObjects.Text;
     gameContext: PokerGameContext;
     betText: import("phaser").GameObjects.Text;
+    payoutValueTexts: Map<PokerHand, Phaser.GameObjects.Text>;
+    roundToken: number;
+    gameOverTimer?: Phaser.Time.TimerEvent;
+    isAdvanceLocked: boolean;
 
     constructor() {
         super("Game");
@@ -79,6 +84,24 @@ export class Game extends Scene {
             .map((s) => this.values.map((v) => `${s}_${v}`))
             .flat();
         this.gameContext = new PokerGameContext();
+        this.payoutValueTexts = new Map<PokerHand, Phaser.GameObjects.Text>();
+        this.roundToken = 0;
+        this.isAdvanceLocked = false;
+    }
+
+    private clearPendingGameOverTimer() {
+        if (this.gameOverTimer) {
+            this.gameOverTimer.remove(false);
+            this.gameOverTimer = undefined;
+        }
+    }
+
+    private requestNextState() {
+        if (this.isAdvanceLocked) {
+            return;
+        }
+
+        this.gameContext.next();
     }
 
     init() {
@@ -149,31 +172,38 @@ export class Game extends Scene {
             .setOrigin(0.5);
         this.setupKeyboardInput();
 
-        this.gameContext.on('betChanged', this.displayBet.bind(this));
-        this.gameContext.on('creditsChanged', this.displayCredits.bind(this));
-        this.gameContext.on('draw', this.displayDraw.bind(this));
-        this.gameContext.on('redraw', this.displayRedraw.bind(this));
-        this.gameContext.on('holdToggled', this.toggleHold.bind(this));
+        (this.gameContext as any).on('betChanged', this.displayBet.bind(this));
+        (this.gameContext as any).on('creditsChanged', this.displayCredits.bind(this));
+        (this.gameContext as any).on('draw', this.displayDraw.bind(this));
+        (this.gameContext as any).on('redraw', this.displayRedraw.bind(this));
+        (this.gameContext as any).on('holdToggled', this.toggleHold.bind(this));
 
     }
 
     private displayRedraw() {
-        let count = 0;
+        const redrawToken = this.roundToken;
+        this.isAdvanceLocked = true;
+        let maxRedrawDelay = 0;
         for (let i = 0; i < 5; i++) {
             // get a count of cards that are not held
             if (!this.gameContext.hand[i].held) {
                 //set card to card back
                 this.card[i].setTexture("back");
-                this.time.delayedCall(i * 200, () => {
+                const redrawDelay = i * 200;
+                maxRedrawDelay = Math.max(maxRedrawDelay, redrawDelay);
+                this.time.delayedCall(redrawDelay, () => {
                     this.sound.play("wood");
                     this.card[i].setTexture(this.getCardTexture(this.gameContext.hand[i]));
                 });
-                count++;
             }
         }
 
         // evaluate the hand after all redraws
-        this.time.delayedCall(count * 200, () => {
+        this.time.delayedCall(maxRedrawDelay, () => {
+            if (redrawToken !== this.roundToken) {
+                return;
+            }
+
             // clear hold status
             this.gameContext.hand.forEach((card) => (card.held = false));
             this.heldText.forEach((held) => held.setVisible(false));
@@ -188,14 +218,32 @@ export class Game extends Scene {
             );
             this.handText.setVisible(true);
 
+            // Move into Bet state when the hand is fully resolved so bet controls are active
+            // before the next draw press.
+            if (!(this.gameContext.state instanceof BetState)) {
+                this.gameContext.next();
+            }
+
+            this.isAdvanceLocked = false;
+
             // after 1.5 seconds, game over text should be displayed
-            this.time.delayedCall(1500, () => {
+            this.clearPendingGameOverTimer();
+            this.gameOverTimer = this.time.delayedCall(1500, () => {
+                if (redrawToken !== this.roundToken) {
+                    return;
+                }
                 this.gameOver.setVisible(true);
+                this.gameOverTimer = undefined;
             });
         });
     }
 
     private displayDraw() {
+        this.roundToken += 1;
+        const drawToken = this.roundToken;
+        this.isAdvanceLocked = true;
+
+        this.clearPendingGameOverTimer();
         // clear held text
         this.heldText.forEach((held) => held.setVisible(false));
         // clear hand text
@@ -214,7 +262,11 @@ export class Game extends Scene {
         }
 
         // after all cards are displayed, evaluate the hand
-        this.time.delayedCall(5 * 200, () => {
+        this.time.delayedCall(5 * 220, () => {
+            if (drawToken !== this.roundToken) {
+                return;
+            }
+
             const evaluation = this.gameContext.evaluation;
             this.handText.setText(`${evaluation}`);
             this.handText.setVisible(true);
@@ -224,13 +276,24 @@ export class Game extends Scene {
                 0,
                 -this.handText.height
             );
+            this.isAdvanceLocked = false;
             console.log("initial hand", ...this.gameContext.hand);
         });
     }
 
     private displayBet() {
         this.betText.setText(this.gameContext.bet.toString());
+        this.updatePayoutValues();
         this.sound.play("blip");
+    }
+
+    private updatePayoutValues() {
+        for (const [hand, basePayout] of payoutMap.entries()) {
+            const payoutText = this.payoutValueTexts.get(hand);
+            if (payoutText) {
+                payoutText.setText((basePayout * this.gameContext.bet).toString());
+            }
+        }
     }
 
     private setupGameOverText() {
@@ -245,6 +308,7 @@ export class Game extends Scene {
                 backgroundColor: "#2222ff",
             })
             .setOrigin(0.5)
+            .setDepth(1000)
             .setVisible(false);
         // align game over text to vertical center of cards
         Phaser.Display.Align.In.Center(this.gameOver, this.card[2]);
@@ -321,15 +385,18 @@ export class Game extends Scene {
                     box.inner.x - box.inner.width / 2 + 5,
                     box.inner.y - box.inner.height / 2 + (y % 6) * 30
                 );
-            this.add
+            const payoutText = this.add
                 .text(0, y, `${value}`, style2)
                 .setOrigin(1, 0)
                 .setPosition(
                     box.valuesBox.x + box.valuesBox.width / 2 - 5,
                     box.valuesBox.y - box.valuesBox.height / 2 + (y % 6) * 30
                 );
+            this.payoutValueTexts.set(key, payoutText);
             y++;
         }
+
+        this.updatePayoutValues();
     }
 
     private setupCreditsAndBet() {
@@ -406,7 +473,7 @@ export class Game extends Scene {
     private setupDrawButton() {
         const drawButton = this.add
             .rectangle(512, 718, 200, 50, 0x00aa00)
-            .setInteractive();
+            .setInteractive({ useHandCursor: true });
         const drawText = this.add
             .text(512, 718, "DRAW", {
                 fontFamily: "upheaval",
@@ -424,7 +491,7 @@ export class Game extends Scene {
             .setOrigin(0.5);
         Phaser.Display.Align.In.Center(drawText, drawButton);
 
-        drawButton.on("pointerdown", this.gameContext.next.bind(this.gameContext));
+        drawButton.on("pointerdown", this.requestNextState.bind(this));
     }
 
     // private NextAction = () => {
@@ -530,7 +597,7 @@ export class Game extends Scene {
             this.input.keyboard.on("keydown-THREE", this.gameContext.onHoldThree, this.gameContext);
             this.input.keyboard.on("keydown-FOUR", this.gameContext.onHoldFour, this.gameContext);
             this.input.keyboard.on("keydown-FIVE", this.gameContext.onHoldFive, this.gameContext);
-            this.input.keyboard.on("keydown-SPACE", this.gameContext.next, this.gameContext);
+            this.input.keyboard.on("keydown-SPACE", this.requestNextState, this);
             this.input.keyboard.on("keydown-ZERO", this.gameContext.onIncreaseBet, this.gameContext);
             this.input.keyboard.on("keydown-NINE", this.gameContext.onDecreaseBet, this.gameContext);
         }
@@ -538,12 +605,36 @@ export class Game extends Scene {
 
     private displayFaceDownCards() {
         for (let i = 0; i < 5; i++) {
-            this.card[i] = this.add.image(
-                startX + i * (cardWidth + cardSpacing),
-                startY,
-                "back"
-            );
-            this.card[i].setDisplaySize(cardWidth, cardHeight);
+            if (!this.card[i]) {
+                this.card[i] = this.add
+                    .image(startX + i * (cardWidth + cardSpacing), startY, "back")
+                    .setInteractive({ useHandCursor: true });
+                this.card[i].setDisplaySize(cardWidth, cardHeight);
+
+                this.card[i].on("pointerdown", () => this.onCardSelected(i));
+            } else {
+                this.card[i].setTexture("back");
+            }
+        }
+    }
+
+    private onCardSelected(index: number) {
+        switch (index) {
+            case 0:
+                this.gameContext.onHoldOne();
+                break;
+            case 1:
+                this.gameContext.onHoldTwo();
+                break;
+            case 2:
+                this.gameContext.onHoldThree();
+                break;
+            case 3:
+                this.gameContext.onHoldFour();
+                break;
+            case 4:
+                this.gameContext.onHoldFive();
+                break;
         }
     }
 
