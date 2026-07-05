@@ -8,6 +8,7 @@
 |---------|-------------|
 | `npm install` | Install project dependencies |
 | `npm run dev` | Launch a development web server |
+| `npm test` | Run unit tests |
 | `npm run build` | Create a production build in the `dist` folder |
 
 ## Writing Code

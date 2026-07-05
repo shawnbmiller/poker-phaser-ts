@@ -1,3 +1,4 @@
+import { describe, it, expect } from 'vitest';
 import { PokerHandEvaluator, PokerHand } from './poker-hand-evaluator';
 import { PlayingCard, Suit, Rank } from './playing-card';
 
@@ -74,6 +75,18 @@ describe('PokerHandEvaluator', () => {
         expect(evaluator.evaluate()).toBe(PokerHand.Straight);
     });
 
+    it('should evaluate an Ace-low Straight', () => {
+        const hand = [
+            new PlayingCard(Suit.Hearts, Rank.Ace),
+            new PlayingCard(Suit.Clubs, Rank.Two),
+            new PlayingCard(Suit.Diamonds, Rank.Three),
+            new PlayingCard(Suit.Spades, Rank.Four),
+            new PlayingCard(Suit.Hearts, Rank.Five),
+        ];
+        const evaluator = new PokerHandEvaluator(hand);
+        expect(evaluator.evaluate()).toBe(PokerHand.Straight);
+    });
+
     it('should evaluate Three of a Kind', () => {
         const hand = [
             new PlayingCard(Suit.Hearts, Rank.Nine),
@@ -120,5 +133,21 @@ describe('PokerHandEvaluator', () => {
         ];
         const evaluator = new PokerHandEvaluator(hand);
         expect(evaluator.evaluate()).toBe(PokerHand.Nothing);
+    });
+
+    it('should not mutate input hand order', () => {
+        const hand = [
+            new PlayingCard(Suit.Spades, Rank.Ace),
+            new PlayingCard(Suit.Hearts, Rank.Two),
+            new PlayingCard(Suit.Clubs, Rank.King),
+            new PlayingCard(Suit.Diamonds, Rank.Four),
+            new PlayingCard(Suit.Hearts, Rank.Jack),
+        ];
+        const originalOrder = hand.map(card => `${card.suit}-${card.rank}`);
+
+        const evaluator = new PokerHandEvaluator(hand);
+        evaluator.evaluate();
+
+        expect(hand.map(card => `${card.suit}-${card.rank}`)).toEqual(originalOrder);
     });
 });
