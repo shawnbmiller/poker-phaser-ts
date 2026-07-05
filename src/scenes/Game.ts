@@ -1,15 +1,20 @@
 import { Scene } from "phaser";
 import WebFont from "webfontloader";
 import { PlayingCard, Rank, Suit } from "../models/playing-card";
-import { PokerHand } from "../models/poker-hand-evaluator";
+import { PokerHand, PokerHandEvaluator } from "../models/poker-hand-evaluator";
 import { PokerGameContext } from "./PokerGameContext";
 import { BetState } from "./BetState";
+import { InitialDrawState } from "./InitialDrawState";
 
 const cardWidth = 190;
 const cardHeight = (cardWidth / 2.5) * 3.5;
 const cardSpacing = 10;
 const startX = 512 - (cardWidth + cardSpacing) * 2;
 const startY = 384 + cardHeight / 2 + cardSpacing;
+const AUTOPILOT_STRATEGY_SAMPLES = 5000;
+const AUTOPILOT_BASE_STRATEGY_SAMPLES = 400;
+const AUTOPILOT_REFINEMENT_MARGIN = 0.06;
+const AUTOPILOT_REFINEMENT_TOP_CANDIDATES = 3;
 // const payouts = {
 //     'Royal Flush': 250, 'Str Flush': 50, 'Four of a Kind': 25, 'Full House': 6, 'Flush': 5,
 //     'Straight': 4, '3 of a Kind': 3, '2 Pair': 2, 'Jacks or Better': 1
@@ -61,6 +66,11 @@ export class Game extends Scene {
     roundToken: number;
     gameOverTimer?: Phaser.Time.TimerEvent;
     isAdvanceLocked: boolean;
+    autopilotEnabled: boolean;
+    autopilotTimer?: Phaser.Time.TimerEvent;
+    autopilotStatusText: Phaser.GameObjects.Text;
+    autopilotButton: Phaser.GameObjects.Rectangle;
+    autopilotButtonText: Phaser.GameObjects.Text;
 
     constructor() {
         super("Game");
@@ -87,6 +97,7 @@ export class Game extends Scene {
         this.payoutValueTexts = new Map<PokerHand, Phaser.GameObjects.Text>();
         this.roundToken = 0;
         this.isAdvanceLocked = false;
+        this.autopilotEnabled = false;
     }
 
     private clearPendingGameOverTimer() {
@@ -94,6 +105,263 @@ export class Game extends Scene {
             this.gameOverTimer.remove(false);
             this.gameOverTimer = undefined;
         }
+    }
+
+    private clearAutopilotTimer() {
+        if (this.autopilotTimer) {
+            this.autopilotTimer.remove(false);
+            this.autopilotTimer = undefined;
+        }
+    }
+
+    private canAffordNextRound(): boolean {
+        return this.gameContext.credits >= this.gameContext.bet;
+    }
+
+    private updateAutopilotUI() {
+        if (!this.autopilotStatusText || !this.autopilotButton || !this.autopilotButtonText) {
+            return;
+        }
+
+        this.autopilotStatusText.setText(
+            this.autopilotEnabled ? "AUTOPILOT: ON" : "AUTOPILOT: OFF"
+        );
+        this.autopilotButton.setFillStyle(this.autopilotEnabled ? 0xaa5500 : 0x555555);
+        this.autopilotButtonText.setText(this.autopilotEnabled ? "STOP AUTO" : "AUTO PLAY");
+    }
+
+    private stopAutopilotIfOutOfCredits(): boolean {
+        if (
+            this.autopilotEnabled &&
+            this.gameContext.state instanceof BetState &&
+            !this.canAffordNextRound()
+        ) {
+            this.setAutopilotEnabled(false);
+            return true;
+        }
+
+        return false;
+    }
+
+    private autopilotAdvanceNow() {
+        if (!this.autopilotEnabled) {
+            return;
+        }
+
+        if (this.isAdvanceLocked) {
+            this.tryAutopilotAdvance(200);
+            return;
+        }
+
+        if (this.stopAutopilotIfOutOfCredits()) {
+            return;
+        }
+
+        if (this.gameContext.state instanceof InitialDrawState) {
+            this.applyAutopilotHoldStrategy();
+        }
+
+        this.requestNextState();
+    }
+
+    private applyAutopilotHoldStrategy() {
+        if (this.gameContext.hand.length !== 5) {
+            return;
+        }
+
+        const bestHoldMask = this.selectBestHoldMask(this.gameContext.hand);
+
+        for (let i = 0; i < this.gameContext.hand.length; i++) {
+            const shouldHold = (bestHoldMask & (1 << i)) !== 0;
+            this.gameContext.hand[i].held = shouldHold;
+            this.heldText[i].setVisible(shouldHold);
+        }
+    }
+
+    private selectBestHoldMask(hand: PlayingCard[]): number {
+        const remainingCards = this.getRemainingCards(hand);
+        const totalSamples = Math.max(1, AUTOPILOT_STRATEGY_SAMPLES);
+        const baseSamples = Math.min(
+            totalSamples,
+            Math.max(1, AUTOPILOT_BASE_STRATEGY_SAMPLES)
+        );
+
+        const estimates: { mask: number; expectedPayout: number }[] = [];
+
+        for (let holdMask = 0; holdMask < 32; holdMask++) {
+            const expectedPayout = this.estimateExpectedPayout(
+                hand,
+                remainingCards,
+                holdMask,
+                baseSamples
+            );
+            estimates.push({ mask: holdMask, expectedPayout });
+        }
+
+        estimates.sort((a, b) => b.expectedPayout - a.expectedPayout);
+
+        if (estimates.length === 0) {
+            return 0;
+        }
+
+        const leader = estimates[0];
+        const runnerUp = estimates[1];
+        const gap = runnerUp
+            ? leader.expectedPayout - runnerUp.expectedPayout
+            : Number.POSITIVE_INFINITY;
+
+        const shouldRefine =
+            totalSamples > baseSamples &&
+            Number.isFinite(gap) &&
+            gap < AUTOPILOT_REFINEMENT_MARGIN;
+
+        if (!shouldRefine) {
+            return leader.mask;
+        }
+
+        const topCount = Math.min(
+            AUTOPILOT_REFINEMENT_TOP_CANDIDATES,
+            estimates.length
+        );
+        const topCandidates = estimates.slice(0, topCount);
+        const extraSamples = totalSamples - baseSamples;
+
+        const refined = topCandidates.map((candidate) => {
+            const extraExpected = this.estimateExpectedPayout(
+                hand,
+                remainingCards,
+                candidate.mask,
+                extraSamples
+            );
+            const combinedExpected =
+                (candidate.expectedPayout * baseSamples +
+                    extraExpected * extraSamples) /
+                totalSamples;
+
+            return { mask: candidate.mask, expectedPayout: combinedExpected };
+        });
+
+        refined.sort((a, b) => b.expectedPayout - a.expectedPayout);
+        return refined[0].mask;
+    }
+
+    private estimateExpectedPayout(
+        hand: PlayingCard[],
+        remainingCards: PlayingCard[],
+        holdMask: number,
+        sampleCount: number
+    ): number {
+        const heldIndexes: number[] = [];
+        const discardIndexes: number[] = [];
+
+        for (let i = 0; i < hand.length; i++) {
+            if ((holdMask & (1 << i)) !== 0) {
+                heldIndexes.push(i);
+            } else {
+                discardIndexes.push(i);
+            }
+        }
+
+        if (sampleCount <= 0) {
+            return 0;
+        }
+
+        if (discardIndexes.length === 0) {
+            return this.evaluatePayoutMultiplier(hand);
+        }
+
+        let totalPayout = 0;
+        for (let sample = 0; sample < sampleCount; sample++) {
+            const simulatedHand = hand.map((card) => new PlayingCard(card.suit, card.rank));
+            const draws = this.drawRandomCardsWithoutReplacement(remainingCards, discardIndexes.length);
+
+            for (let i = 0; i < discardIndexes.length; i++) {
+                simulatedHand[discardIndexes[i]] = draws[i];
+            }
+
+            totalPayout += this.evaluatePayoutMultiplier(simulatedHand);
+        }
+
+        return totalPayout / sampleCount;
+    }
+
+    private evaluatePayoutMultiplier(hand: PlayingCard[]): number {
+        const evaluation = new PokerHandEvaluator(hand).evaluate();
+        return payoutMap.get(evaluation) ?? 0;
+    }
+
+    private drawRandomCardsWithoutReplacement(
+        cards: PlayingCard[],
+        drawCount: number
+    ): PlayingCard[] {
+        const pool = cards.slice();
+        const drawn: PlayingCard[] = [];
+
+        for (let i = 0; i < drawCount; i++) {
+            const index = Math.floor(Math.random() * pool.length);
+            drawn.push(pool[index]);
+            pool.splice(index, 1);
+        }
+
+        return drawn;
+    }
+
+    private getRemainingCards(hand: PlayingCard[]): PlayingCard[] {
+        const deckCards: PlayingCard[] = [];
+
+        for (const suit of [Suit.Hearts, Suit.Diamonds, Suit.Clubs, Suit.Spades]) {
+            for (
+                let rank = Rank.Two;
+                rank <= Rank.Ace;
+                rank = (rank + 1) as Rank
+            ) {
+                deckCards.push(new PlayingCard(suit, rank));
+            }
+        }
+
+        return deckCards.filter((deckCard) =>
+            !hand.some(
+                (handCard) =>
+                    handCard.suit === deckCard.suit && handCard.rank === deckCard.rank
+            )
+        );
+    }
+
+    private tryAutopilotAdvance(delayMs = 300) {
+        if (!this.autopilotEnabled) {
+            return;
+        }
+
+        if (this.stopAutopilotIfOutOfCredits()) {
+            return;
+        }
+
+        this.clearAutopilotTimer();
+        this.autopilotTimer = this.time.delayedCall(delayMs, () => {
+            this.autopilotTimer = undefined;
+            this.autopilotAdvanceNow();
+        });
+    }
+
+    private setAutopilotEnabled(enabled: boolean) {
+        if (this.autopilotEnabled === enabled) {
+            return;
+        }
+
+        this.autopilotEnabled = enabled;
+        if (!enabled) {
+            this.clearAutopilotTimer();
+        }
+
+        this.updateAutopilotUI();
+
+        if (enabled) {
+            this.tryAutopilotAdvance(250);
+        }
+    }
+
+    private toggleAutopilot() {
+        this.setAutopilotEnabled(!this.autopilotEnabled);
     }
 
     private requestNextState() {
@@ -178,6 +446,11 @@ export class Game extends Scene {
         (this.gameContext as any).on('redraw', this.displayRedraw.bind(this));
         (this.gameContext as any).on('holdToggled', this.toggleHold.bind(this));
 
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            this.setAutopilotEnabled(false);
+            this.clearAutopilotTimer();
+        });
+
     }
 
     private displayRedraw() {
@@ -225,6 +498,7 @@ export class Game extends Scene {
             }
 
             this.isAdvanceLocked = false;
+            this.tryAutopilotAdvance(350);
 
             // after 1.5 seconds, game over text should be displayed
             this.clearPendingGameOverTimer();
@@ -278,6 +552,7 @@ export class Game extends Scene {
             );
             this.isAdvanceLocked = false;
             console.log("initial hand", ...this.gameContext.hand);
+            this.tryAutopilotAdvance(350);
         });
     }
 
@@ -492,6 +767,46 @@ export class Game extends Scene {
         Phaser.Display.Align.In.Center(drawText, drawButton);
 
         drawButton.on("pointerdown", this.requestNextState.bind(this));
+
+        this.autopilotButton = this.add
+            .rectangle(742, 718, 220, 50, 0x555555)
+            .setInteractive({ useHandCursor: true });
+        this.autopilotButtonText = this.add
+            .text(742, 718, "AUTO PLAY", {
+                fontFamily: "upheaval",
+                fontSize: "20pt",
+                color: "#ffffff",
+                shadow: {
+                    color: "#333333",
+                    offsetX: 2,
+                    offsetY: 2,
+                    blur: 0,
+                    fill: true,
+                    stroke: false,
+                },
+            })
+            .setOrigin(0.5);
+        Phaser.Display.Align.In.Center(this.autopilotButtonText, this.autopilotButton);
+
+        this.autopilotButton.on("pointerdown", this.toggleAutopilot.bind(this));
+
+        this.autopilotStatusText = this.add
+            .text(742, 676, "AUTOPILOT: OFF", {
+                fontFamily: "upheaval",
+                fontSize: "18pt",
+                color: "#ffffff",
+                shadow: {
+                    color: "#333333",
+                    offsetX: 2,
+                    offsetY: 2,
+                    blur: 0,
+                    fill: true,
+                    stroke: false,
+                },
+            })
+            .setOrigin(0.5);
+
+        this.updateAutopilotUI();
     }
 
     // private NextAction = () => {
@@ -600,6 +915,7 @@ export class Game extends Scene {
             this.input.keyboard.on("keydown-SPACE", this.requestNextState, this);
             this.input.keyboard.on("keydown-ZERO", this.gameContext.onIncreaseBet, this.gameContext);
             this.input.keyboard.on("keydown-NINE", this.gameContext.onDecreaseBet, this.gameContext);
+            this.input.keyboard.on("keydown-A", this.toggleAutopilot, this);
         }
     }
 
@@ -711,6 +1027,7 @@ export class Game extends Scene {
 
     private displayCredits() {
         this.creditsText.setText(this.gameContext.credits.toString());
+        this.stopAutopilotIfOutOfCredits();
     }
 }
 

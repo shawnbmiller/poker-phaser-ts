@@ -31,17 +31,16 @@ export class Preloader extends Scene
     {
         const suit = ['hearts', 'diamonds', 'clubs', 'spades'];
         const values = ['ace', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'jack', 'queen', 'king'];
-        const fileExtension = '.svg';
+        const fileExtension = '.png';
         const fileNames = suit.map(s => values.map(v => `${s}_${v}`)).flat();
         
-        this.load.setPath('assets/svg_playing_cards/fronts');
+        this.load.setPath('assets/svg_playing_cards/fronts/png_96_dpi');
         for (const fileName of fileNames) {
-            this.load.svg(fileName, fileName.concat(fileExtension));
-            console.log(fileName.concat(fileExtension));
+            this.load.image(fileName, fileName.concat(fileExtension));
         }
 
-        this.load.setPath('assets/svg_playing_cards/backs');
-        this.load.svg('back', 'red2.svg');
+        this.load.setPath('assets/svg_playing_cards/backs/png_96_dpi');
+        this.load.image('back', 'red2.png');
         
         this.load.setPath('assets');
         this.load.audio('wood', 'wood.wav');

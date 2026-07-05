@@ -26,11 +26,12 @@ const config: Types.Core.GameConfig = {
         MainGame,
         GameOver
     ],
-    pixelArt: true,
+    pixelArt: false,
     render: {
-        antialias: false,
-        pixelArt: true,
-        antialiasGL: false
+        antialias: true,
+        pixelArt: false,
+        antialiasGL: true,
+        roundPixels: false
     },
     plugins: {
         global: [{
